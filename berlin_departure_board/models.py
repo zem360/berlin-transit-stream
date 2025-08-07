@@ -1,7 +1,19 @@
 from datetime import datetime
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel
+
+
+class TransportMode(str, Enum):
+    SUBURBAN = "suburban"  # S-Bahn
+    SUBWAY = "subway"  # U-Bahn
+    REGIONAL = "regional"  # RB
+    EXPRESS = "express"  # ICE
+    TRAM = "tram"
+    BUS = "bus"
+    FERRY = "ferry"
+    NA = "not defined"
 
 
 class Location(BaseModel):
@@ -26,7 +38,7 @@ class Stop(BaseModel):
     id: str
     name: str
     location: Location
-    product: Products
+    products: Products
 
 
 class Line(BaseModel):
@@ -50,7 +62,29 @@ class Departure(BaseModel):
     stop: Stop
     when: Optional[datetime] = None
     plannedWhen: datetime
-    delay: Optional[int] = None
+    delay: int = 0
     platform: Optional[str] = None
     plannedPlatform: Optional[str] = None
-    direction: Line
+    direction: str
+    line: Line
+    cancelled: bool = False
+
+    @property
+    def delay_minutes(self) -> float:
+        return self.delay / 60.0
+
+
+class DepartureParsedInfo(BaseModel):
+    trip_id: str
+    stop_id: str
+    stop_name: str
+    line_id: str
+    line_name: str
+    transport_mode: TransportMode
+    direction: str
+    planned_departure: datetime
+    actual_departure: datetime
+    delay_minutes: float = 0.0
+    platform: Optional[str] = None
+    planned_platform: Optional[str] = None
+    cancelled: bool
