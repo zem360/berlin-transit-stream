@@ -29,7 +29,7 @@ ENV/
 env.bak/
 venv.bak/
 
-# Poetry 
+# Poetry
 poetry.lock
 .python-version
 
@@ -54,4 +54,3 @@ Thumbs.db
 htmlcov/
 .pytest_cache/
 test_*
-
