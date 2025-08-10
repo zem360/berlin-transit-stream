@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     POLLER_HOST: str = "0.0.0.0"
     POLLER_PORT: int = 8000
 
+    LOG_LEVEL: str = "INFO"
+    DEBUG: bool = False
+
     class Config:
         env_file = ".env"
         case_sensitive = True
