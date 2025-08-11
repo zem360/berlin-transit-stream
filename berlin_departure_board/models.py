@@ -76,8 +76,8 @@ class Departure(BaseModel):
 
 class DepartureParsedInfo(BaseModel):
     trip_id: str
-    stop_id: str
-    stop_name: str
+    station_id: str
+    station_name: str
     line_id: str
     line_name: str
     transport_mode: TransportMode
@@ -88,3 +88,4 @@ class DepartureParsedInfo(BaseModel):
     platform: Optional[str] = None
     planned_platform: Optional[str] = None
     cancelled: bool
+    collected_at: datetime
