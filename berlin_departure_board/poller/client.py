@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import httpx
 from loguru import logger
 
@@ -33,29 +35,39 @@ class BVGAPIClient:
                 f"Found {len(raw_departures)} raw departures for station {station_id}"
             )
 
+            fetch_time = datetime.now()
+
             process_departures = []
             for raw_dep in raw_departures:
                 try:
                     departures = Departure(**raw_dep)
-                    departure_parsed = self._get_departure_parsed(departures)
-                    process_departures.append(departure_parsed)
+                    departure_info = self._get_departure_parsed(departures, fetch_time)
+                    process_departures.append(departure_info)
                 except Exception as e:
                     logger.warning(f"Failed to parse departure: {e}")
                     continue
 
             logger.info(f"Successfully processed {len(process_departures)} departures")
             return process_departures
-        except:
-            pass
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"HTTP error fetching departures for {station_id}: {e.response.status_code}"
+            )
+            return []
+        except httpx.TimeoutException:
+            logger.error(f"Timeout fetching departures for {station_id}")
+            return []
 
-    def _get_departure_parsed(self, departure_info: Departure) -> DepartureParsedInfo:
+    def _get_departure_parsed(
+        self, departure_info: Departure, fetch_time: datetime
+    ) -> DepartureParsedInfo:
         delay = departure_info.delay_minutes
         transport_mode = self._map_transport_mode(departure_info.line.product)
 
         return DepartureParsedInfo(
             trip_id=departure_info.tripId,
-            stop_id=departure_info.stop.id,
-            stop_name=departure_info.stop.name,
+            station_id=departure_info.stop.id,
+            station_name=departure_info.stop.name,
             line_id=departure_info.line.id,
             line_name=departure_info.line.name,
             transport_mode=transport_mode,
@@ -66,6 +78,7 @@ class BVGAPIClient:
             platform=departure_info.platform,
             planned_platform=departure_info.plannedPlatform,
             cancelled=departure_info.cancelled,
+            collected_at=fetch_time,
         )
 
     def _map_transport_mode(self, product_str: str) -> TransportMode:
