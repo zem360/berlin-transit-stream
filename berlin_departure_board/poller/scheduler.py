@@ -4,12 +4,14 @@ from datetime import datetime
 from loguru import logger
 
 from berlin_departure_board.config import settings
+from berlin_departure_board.kafka_streaming.producer import KafkaProducerClient
 from berlin_departure_board.poller.client import BVGAPIClient
 
 
 class BVGPollingScheduler:
     def __init__(self) -> None:
         self.bvg_client = BVGAPIClient()
+        self.kafka_producer = KafkaProducerClient()
         self.is_running = False
         self.stations_to_poll = settings.POLLER_ENABLED_STATIONS
 
@@ -22,11 +24,18 @@ class BVGPollingScheduler:
             )
 
             if departures:
-                logger.info(
-                    f"✅ Polled {len(departures)} departures for station {station_id}"
-                )
-                await asyncio.sleep(1)
-                return True
+                success = await self.kafka_producer.send_departures(departures)
+
+                if success:
+                    logger.info(
+                        f"✅ Polled {len(departures)} departures for station {station_id}"
+                    )
+                    return True
+                else:
+                    logger.error(
+                        f"❌ Failed to send departures for station {station_id}"
+                    )
+                    return False
             else:
                 logger.warning(f"⚠️  No departures found for station {station_id}")
                 return False
