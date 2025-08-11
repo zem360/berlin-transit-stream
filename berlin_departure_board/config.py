@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     DEBUG: bool = False
 
+    KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
+    KAFKA_CLIENT_ID: str = "bvg-poller"
+    KAFKA_TOPIC_DEPARTURES: str = "bvg-departures"
+
     class Config:
         env_file = ".env"
         case_sensitive = True
