@@ -14,6 +14,11 @@ class Settings(BaseSettings):
         # "900003201",  # S+U Berlin Hauptbahnhof
         # "900120003",  # S Ostkreuz Bhf
         # "900023201",  # S+U Zoologischer Garten
+        # "900017101",  # S+U Potsdamer Platz
+        # "900024101",  # S+U Warschauer Str.
+        # "900013102",  # S Hackescher Markt
+        # "900110001",  # S+U Gesundbrunnen
+        # "900230999",  # S+U Schönhauser Allee
     ]
 
     POLLING_INTERVAL: int = 10
@@ -26,7 +31,14 @@ class Settings(BaseSettings):
 
     KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
     KAFKA_CLIENT_ID: str = "bvg-poller"
-    KAFKA_TOPIC_DEPARTURES: str = "bvg-departures"
+    KAFKA_TOPIC_DEPARTURES: str = "station-departures"
+
+    # Spark Streaming Settings
+    SPARK_APP_NAME: str = "BVG-Departure-Processor"
+    SPARK_PROCESSING_INTERVAL: str = "10 seconds"
+    SPARK_WATERMARK_DELAY: str = "5 minutes"
+    SPARK_WINDOW_DURATION: str = "5 minutes"
+    SPARK_SLIDE_DURATION: str = "1 minute"
 
     # Redis Settings
     REDIS_HOST: str = "localhost"
