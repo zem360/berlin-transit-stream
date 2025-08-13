@@ -38,7 +38,7 @@ class KafkaProducerClient:
             for departure in departures:
                 message = {
                     "event_type": "departure_update",
-                    "timestamp": datetime.now(),
+                    "timestamp": datetime.now().isoformat(),
                     "data": {
                         "trip_id": departure.trip_id,
                         "station_id": departure.station_id,
@@ -53,6 +53,8 @@ class KafkaProducerClient:
                         "platform": departure.platform,
                         "planned_platform": departure.planned_platform,
                         "collected_at": departure.collected_at.isoformat(),
+                        "longitude": departure.longitude,
+                        "latitude": departure.latitude,
                     },
                 }
 
