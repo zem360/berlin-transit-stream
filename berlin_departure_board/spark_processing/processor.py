@@ -35,7 +35,7 @@ class BVGSparkProcessor:
         }
 
         self.spark = (
-            SparkSession.builder.appName(settings.SPARK_APP_NAME)
+            SparkSession.builder.appName(settings.SPARK_APP_NAME)  # type: ignore
             .config(
                 "spark.jars.packages",
                 "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.0",
