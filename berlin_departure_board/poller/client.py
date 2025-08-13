@@ -79,6 +79,8 @@ class BVGAPIClient:
             planned_platform=departure_info.plannedPlatform,
             cancelled=departure_info.cancelled,
             collected_at=fetch_time,
+            longitude=departure_info.stop.location.longitude,
+            latitude=departure_info.stop.location.latitude,
         )
 
     def _map_transport_mode(self, product_str: str) -> TransportMode:
