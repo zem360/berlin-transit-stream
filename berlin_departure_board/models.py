@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, confloat
 
 
 class TransportMode(str, Enum):
@@ -62,7 +62,7 @@ class Departure(BaseModel):
     stop: Stop
     when: Optional[datetime] = None
     plannedWhen: datetime
-    delay: int = 0
+    delay: Optional[int] = None
     platform: Optional[str] = None
     plannedPlatform: Optional[str] = None
     direction: str
@@ -71,7 +71,7 @@ class Departure(BaseModel):
 
     @property
     def delay_minutes(self) -> float:
-        return self.delay / 60.0
+        return (self.delay or 0) / 60.0
 
 
 class DepartureParsedInfo(BaseModel):
@@ -89,3 +89,8 @@ class DepartureParsedInfo(BaseModel):
     planned_platform: Optional[str] = None
     cancelled: bool
     collected_at: datetime
+
+    latitude: float | None = Field(None, description="Station latitude", ge=-90, le=90)
+    longitude: float | None = Field(
+        None, description="Station longitude", ge=-180, le=180
+    )
