@@ -23,6 +23,9 @@ pandas = "^2.2.0"
 python-dotenv = "^1.0.0"
 loguru = "^0.7.2"
 apscheduler = "^3.10.4"
+pyspark = "^3.4.0"
+py4j = "^0.10.9.5"
+redis = "^5.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"
