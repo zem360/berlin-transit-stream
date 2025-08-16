@@ -23,12 +23,16 @@ def main():
     logger.info(f"🗄️  Redis: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
 
     processor = BVGSparkProcessor()
-    query = None
+    queries = None
 
     try:
-        query = processor.start_processing()
+        queries = processor.start_processing()
 
-        query.awaitTermination()
+        if isinstance(queries, tuple):
+            departure_query, station_query = queries
+            departure_query.awaitTermination()
+        else:
+            queries.awaitTermination()
 
     except KeyboardInterrupt:
         logger.info("🛑 Received keyboard interrupt")
@@ -36,9 +40,12 @@ def main():
         logger.error(f"❌ Unexpected error: {e}")
         raise
     finally:
-        if query:
-            processor.stop_processing(query)
-        logger.info("✅ Spark processor shutdown complete")
+        if queries:
+            if isinstance(queries, tuple):
+                processor.stop_processing(*queries)
+            else:
+                processor.stop_processing(queries)
+        logger.info("✅ Enhanced Spark processor shutdown complete")
 
 
 if __name__ == "__main__":
