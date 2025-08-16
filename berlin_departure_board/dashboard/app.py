@@ -1,51 +1,31 @@
-import json
-import time
 from datetime import datetime
-from typing import Dict, List
 
-import redis  # type: ignore[import]
+import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
-from berlin_departure_board.config import settings
+from berlin_departure_board.storage.client import RedisClient
 
-BERLIN_COLORS = {
-    "primary": "#FFD700",
-    "secondary": "#000000",
-    "background": "#F5F5F5",
-    "red": "#DC143C",
-    "white": "#FFFFFF",
-    "dark_gray": "#2F2F2F",
-    "light_yellow": "#FFF8DC",
-}
+BERLIN_CENTER = {"lat": 52.5200, "lon": 13.4050}
+BERLIN_BOUNDS = {"lat_min": 52.3, "lat_max": 52.7, "lon_min": 13.0, "lon_max": 13.8}
 
-BERLIN_STATIONS = {
-    "900100003": "🚉 S+U Alexanderplatz",
-    "900100001": "🚉 S+U Friedrichstraße",
-    "900003201": "🚉 S+U Berlin Hauptbahnhof",
-    "900120003": "🚉 S Ostkreuz",
-    "900023201": "🚉 S+U Zoologischer Garten",
-    "900017101": "🚉 S+U Potsdamer Platz",
-    "900024101": "🚉 S+U Warschauer Straße",
-    "900013102": "🚉 S Hackescher Markt",
-    "900110001": "🚉 S+U Gesundbrunnen",
-    "900230999": "🚉 S+U Schönhauser Allee",
+
+COLORS = {
+    "primary": "#1f77b4",
+    "secondary": "#ff7f0e",
+    "success": "#2ca02c",
+    "warning": "#ff7f0e",
+    "danger": "#d62728",
+    "background": "#f8f9fa",
+    "text": "#212529",
+    "muted": "#6c757d",
 }
 
 
-TRANSPORT_MODES = {
-    "suburban": {"icon": "🚋", "name": "S-Bahn", "color": "#FFD700"},
-    "subway": {"icon": "🚇", "name": "U-Bahn", "color": "#0066CC"},
-    "bus": {"icon": "🚌", "name": "Bus", "color": "#8B4513"},
-    "tram": {"icon": "🚊", "name": "Tram", "color": "#FF6B35"},
-    "regional": {"icon": "🚆", "name": "Regional", "color": "#800080"},
-    "express": {"icon": "🚄", "name": "Express", "color": "#FF0000"},
-}
-
-
-def init_streamlit_config():
+def init_page_config():
     st.set_page_config(
-        page_title="🐻 Berlin Departure Board",
-        page_icon="🚋",
+        page_title="Berlin Transit Delay Heatmap",
+        page_icon="🗺️",
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -54,100 +34,62 @@ def init_streamlit_config():
         f"""
     <style>
     .main {{
-        background-color: {BERLIN_COLORS['background']};
-    }}
-
-    .stApp > header {{
-        background-color: transparent;
+        background-color: {COLORS['background']};
+        color: {COLORS['text']};
     }}
 
     .block-container {{
         padding-top: 2rem;
         padding-bottom: 2rem;
+        max-width: 1200px;
     }}
 
-    /* Berlin coat of arms inspired header */
-    .berlin-header {{
-        background: linear-gradient(90deg, {BERLIN_COLORS['primary']} 0%, {BERLIN_COLORS['light_yellow']} 100%);
-        padding: 1.5rem;
+    .header-container {{
+        background: linear-gradient(135deg, {COLORS['primary']} 0%, {COLORS['secondary']} 100%);
+        padding: 2rem;
         border-radius: 10px;
         margin-bottom: 2rem;
-        border: 3px solid {BERLIN_COLORS['secondary']};
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        color: white;
         text-align: center;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     }}
 
-    .berlin-title {{
-        color: {BERLIN_COLORS['secondary']};
-        font-size: 2.5rem;
+    .metric-card {{
+        background: white;
+        padding: 1.5rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        border-left: 4px solid {COLORS['primary']};
+        margin: 1rem 0;
+    }}
+
+    .metric-title {{
+        font-size: 2rem;
         font-weight: bold;
         margin: 0;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+        color: {COLORS['primary']};
     }}
 
-    .berlin-subtitle {{
-        color: {BERLIN_COLORS['dark_gray']};
-        font-size: 1.2rem;
+    .metric-subtitle {{
+        font-size: 0.9rem;
+        color: {COLORS['muted']};
         margin: 0.5rem 0 0 0;
     }}
 
-    /* Sidebar styling */
-    .css-1d391kg {{
-        background-color: {BERLIN_COLORS['secondary']};
+    .status-indicator {{
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 8px;
     }}
 
-    .css-1d391kg .css-1v3fvcr {{
-        color: {BERLIN_COLORS['primary']};
-    }}
+    .status-good {{ background-color: {COLORS['success']}; }}
+    .status-warning {{ background-color: {COLORS['warning']}; }}
+    .status-danger {{ background-color: {COLORS['danger']}; }}
 
-    /* Departure table styling */
-    .departure-card {{
-        background: {BERLIN_COLORS['white']};
-        border-left: 5px solid {BERLIN_COLORS['primary']};
-        padding: 1rem;
-        margin: 0.5rem 0;
-        border-radius: 5px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }}
-
-    .delay-warning {{
-        color: {BERLIN_COLORS['red']};
-        font-weight: bold;
-    }}
-
-    .on-time {{
-        color: #008000;
-        font-weight: bold;
-    }}
-
-    /* Station selector */
-    .stSelectbox > div > div {{
-        background-color: {BERLIN_COLORS['primary']};
-        border: 2px solid {BERLIN_COLORS['secondary']};
-    }}
-
-    /* Metrics styling */
-    .metric-container {{
-        background: {BERLIN_COLORS['white']};
-        padding: 1rem;
-        border-radius: 8px;
-        border: 1px solid {BERLIN_COLORS['primary']};
-        text-align: center;
-        margin: 0.5rem 0;
-    }}
-
-    /* Auto-refresh indicator */
-    .refresh-indicator {{
-        position: fixed;
-        top: 10px;
-        right: 10px;
-        background: {BERLIN_COLORS['primary']};
-        color: {BERLIN_COLORS['secondary']};
-        padding: 0.5rem 1rem;
-        border-radius: 20px;
-        font-size: 0.8rem;
-        font-weight: bold;
-        z-index: 999;
+    .sidebar .sidebar-content {{
+        background-color: white;
     }}
     </style>
     """,
@@ -156,364 +98,518 @@ def init_streamlit_config():
 
 
 @st.cache_resource
-def init_redis_connection():
-    """Initialize Redis connection with caching"""
+def init_redis_client():
     try:
-        redis_client = redis.Redis(
-            host=settings.REDIS_HOST,
-            port=settings.REDIS_PORT,
-            db=settings.REDIS_DB,
-            password=settings.REDIS_PASSWORD,
-            decode_responses=True,
-            socket_connect_timeout=5,
-            socket_timeout=5,
-        )
-        redis_client.ping()
-        return redis_client
+        return RedisClient()
     except Exception as e:
-        st.error(f"❌ Could not connect to Redis: {e}")
+        st.error(f"❌ Failed to connect to Redis: {e}")
         return None
 
 
-def get_station_departures(redis_client: redis.Redis, station_id: str) -> List[Dict]:
-    """Fetch departures for a specific station from Redis"""
+def get_station_delay_data(
+    redis_client: RedisClient, minutes_back: int = 15
+) -> pd.DataFrame:
     try:
-        key = f"{settings.REDIS_DEPARTURES_KEY_PREFIX}station:{station_id}"
+        all_metrics = redis_client.get_all_station_metrics(minutes_back)
 
-        raw_departures = redis_client.zrange(key, -20, -1)
+        if not all_metrics:
+            return pd.DataFrame()
 
-        if not raw_departures:
-            return []
-
-        departures = []
-        current_time = datetime.now()
-
-        for dep_json in raw_departures:
-            try:
-                departure = json.loads(dep_json)
-
-                planned_dt = datetime.fromisoformat(
-                    departure["planned_departure"].replace("Z", "+00:00")
-                ).replace(tzinfo=None)
-
-                if planned_dt > current_time:
-                    departure["planned_departure_dt"] = planned_dt
-                    departures.append(departure)
-
-            except (json.JSONDecodeError, KeyError, ValueError) as e:
+        rows = []
+        for station_id, metrics_list in all_metrics.items():
+            if not metrics_list:
                 continue
 
-        departures.sort(key=lambda x: x["planned_departure_dt"])
-        return departures[:15]
+            valid_metrics = [m for m in metrics_list if m.get("avg_delay") is not None]
+
+            if not valid_metrics:
+                continue
+
+            latest_metric = max(metrics_list, key=lambda x: x.get("window_start", ""))
+            lat = latest_metric.get("latitude")
+            lon = latest_metric.get("longitude")
+            station_name = latest_metric.get("station_name")
+
+            if not lat or not lon:
+                continue
+
+            total_departures = sum(
+                int(m.get("total_departures", 0)) for m in valid_metrics
+            )
+            delayed_departures = sum(
+                int(m.get("delayed_departures", 0)) for m in valid_metrics
+            )
+            on_time_departures = sum(
+                int(m.get("on_time_departures", 0)) for m in valid_metrics
+            )
+
+            weighted_delay_sum = sum(
+                float(m.get("avg_delay", 0)) * int(m.get("total_departures", 0))
+                for m in valid_metrics
+                if m.get("avg_delay") is not None
+            )
+            avg_delay = (
+                weighted_delay_sum / total_departures if total_departures > 0 else 0.0
+            )
+
+            max_delay = max(float(m.get("max_delay", 0)) for m in valid_metrics)
+
+            on_time_pct = (
+                (on_time_departures / total_departures * 100)
+                if total_departures > 0
+                else 100.0
+            )
+            delay_pct = (
+                (delayed_departures / total_departures * 100)
+                if total_departures > 0
+                else 0.0
+            )
+
+            rows.append(
+                {
+                    "station_id": station_id,
+                    "station_name": station_name,
+                    "lat": float(lat),
+                    "lon": float(lon),
+                    "avg_delay": avg_delay,
+                    "max_delay": max_delay,
+                    "total_departures": total_departures,
+                    "delayed_departures": delayed_departures,
+                    "on_time_departures": on_time_departures,
+                    "on_time_pct": round(on_time_pct, 1),
+                    "delay_pct": round(delay_pct, 1),
+                    "window_start": latest_metric.get("window_start", ""),
+                    "updated_at": latest_metric.get("updated_at", ""),
+                    "raw_metric": str(latest_metric),
+                }
+            )
+
+        return pd.DataFrame(rows)
 
     except Exception as e:
-        st.error(f"Error fetching departures: {e}")
-        return []
+        st.error(f"Error fetching station data: {e}")
+        return pd.DataFrame()
 
 
-def format_departure_time(departure_dt: datetime) -> tuple[str, str]:
-    now = datetime.now()
-    diff = departure_dt - now
-    actual_time = departure_dt.strftime("%H:%M")
-
-    if diff.total_seconds() < 60:
-        return "🟢 **Now**", actual_time
-    elif diff.total_seconds() < 300:
-        mins = int(diff.total_seconds() / 60)
-        return f"🟡 **{mins} min**", actual_time
-    else:
-        return f"⏰ **{actual_time}**", actual_time
-
-
-def get_delay_info(departure: Dict) -> tuple[str, str]:
-    delay_minutes = departure.get("delay_minutes", 0)
-
-    if delay_minutes == 0:
-        return "✅ On time", "on-time"
-    elif delay_minutes < 3:
-        return f"🟡 +{delay_minutes:.0f} min", "delay-warning"
-    else:
-        return f"🔴 +{delay_minutes:.0f} min", "delay-warning"
-
-
-def render_departure_table(departures: List[Dict], station_name: str):
-    if not departures:
-        st.warning(f"📭 No upcoming departures found for {station_name}")
-        st.info(
-            "💡 Try selecting a different station or check if the data pipeline is running."
+def create_delay_heatmap(df: pd.DataFrame) -> go.Figure:
+    if df.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            title="No Station Data Available",
+            geo=dict(
+                center={"lat": BERLIN_CENTER["lat"], "lon": BERLIN_CENTER["lon"]},
+                projection_scale=50,
+                showland=True,
+                landcolor="lightgray",
+            ),
+            height=600,
         )
-        return
+        return fig
 
-    st.subheader(f"🚋 Next Departures from {station_name}")
+    df["delay_category"] = pd.cut(
+        df["avg_delay"],
+        bins=[-float("inf"), 0, 2, 5, 10, float("inf")],
+        labels=[
+            "On Time",
+            "Minor Delay",
+            "Moderate Delay",
+            "Major Delay",
+            "Severe Delay",
+        ],
+    )
 
-    for i, dep in enumerate(departures):
-        transport_info = TRANSPORT_MODES.get(
-            dep["transport_mode"], {"icon": "🚌", "name": "Unknown", "color": "#666666"}
+    color_map = {
+        "On Time": "#64B5F6",
+        "Minor Delay": "#42A5F5",
+        "Moderate Delay": "#2196F3",
+        "Major Delay": "#1976D2",
+        "Severe Delay": "#0D47A1",
+    }
+
+    df["color"] = df["delay_category"].map(color_map)
+
+    fig = go.Figure()
+
+    legend_categories = [
+        ("On Time (< 2 min)", "#64B5F6"),
+        ("Minor Delay (2-5 min)", "#42A5F5"),
+        ("Moderate Delay (5-10 min)", "#2196F3"),
+        ("Major Delay (10+ min)", "#1976D2"),
+        ("Severe Delay", "#0D47A1"),
+    ]
+
+    for category, color in legend_categories:
+        fig.add_trace(
+            go.Scattermapbox(
+                lat=[None],
+                lon=[None],
+                mode="markers",
+                marker=dict(size=15, color=color, opacity=0.8),
+                name=category,
+                showlegend=True,
+                hoverinfo="skip",
+            )
         )
 
-        departure_time, actual_time = format_departure_time(dep["planned_departure_dt"])
-        delay_text, delay_class = get_delay_info(dep)
-
-        col1, col2, col3, col4 = st.columns([1, 3, 2, 2])
-
-        with col1:
-            st.markdown(
-                f"""
-            <div style='text-align: center; font-size: 2rem;'>
-                {transport_info['icon']}
-            </div>
-            """,
-                unsafe_allow_html=True,
+    for _, row in df.iterrows():
+        fig.add_trace(
+            go.Scattermapbox(
+                lat=[row["lat"]],
+                lon=[row["lon"]],
+                mode="markers",
+                marker=dict(
+                    size=max(20, 20 + (row["avg_delay"] * 3)),
+                    color=row["color"],
+                    opacity=0.9,
+                ),
+                text=row["station_name"],
+                hovertemplate=(
+                    f"<b>{row['station_name']}</b><br>"
+                    f"Category: {row['delay_category']}<br>"
+                    f"Average Delay: {row['avg_delay']:.1f} min<br>"
+                    f"Max Delay: {row['max_delay']:.1f} min<br>"
+                    f"On Time: {row['on_time_pct']:.1f}%<br>"
+                    f"Total Departures: {row['total_departures']}<br>"
+                    f"<extra></extra>"
+                ),
+                showlegend=False,
             )
+        )
 
-        with col2:
-            st.markdown(
-                f"""
-            <div class='departure-card'>
-                <strong style='color: {transport_info['color']}; font-size: 1.2rem;'>
-                    {dep['line_name']}
-                </strong><br>
-                <span style='color: #666; font-size: 0.9rem;'>
-                    🎯 {dep['direction']}
-                </span>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
+    fig.update_layout(
+        title={
+            "text": "Berlin Station Delay Heatmap",
+            "x": 0.5,
+            "xanchor": "center",
+            "font": {"size": 20, "color": COLORS["text"]},
+        },
+        mapbox=dict(
+            style="open-street-map",
+            center={"lat": BERLIN_CENTER["lat"], "lon": BERLIN_CENTER["lon"]},
+            zoom=11,
+            bearing=0,
+            pitch=0,
+        ),
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01,
+            bgcolor="rgba(255,255,255,0.9)",
+            bordercolor="rgba(0,0,0,0.2)",
+            borderwidth=1,
+        ),
+        height=600,
+        margin=dict(l=0, r=0, t=60, b=0),
+        paper_bgcolor=COLORS["background"],
+        plot_bgcolor=COLORS["background"],
+    )
 
-        with col3:
-            st.markdown(
-                f"""
-            <div class='departure-card'>
-                {departure_time}<br>
-                <span style='font-size: 0.9rem; color: #333; font-weight: bold;'>
-                    🕐 {actual_time}
-                </span><br>
-                <span style='font-size: 0.8rem; color: #666;'>
-                    Platform {dep.get('platform', 'TBA')}
-                </span>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-        with col4:
-            st.markdown(
-                f"""
-            <div class='departure-card'>
-                <span class='{delay_class}'>{delay_text}</span><br>
-                <span style='font-size: 0.8rem; color: #666;'>
-                    {transport_info['name']}
-                </span>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-        if i < len(departures) - 1:
-            st.markdown("---")
+    return fig
 
 
-def render_station_metrics(departures: List[Dict]):
-    """Render station metrics"""
-    if not departures:
+def render_summary_metrics(df: pd.DataFrame):
+    if df.empty:
+        st.warning("No station data available for metrics")
         return
 
     col1, col2, col3, col4 = st.columns(4)
 
-    mode_counts: Dict[str, int] = {}
-    total_delays = 0
-    delayed_count = 0
-
-    for dep in departures:
-        mode = dep.get("transport_mode", "unknown")
-        mode_counts[mode] = mode_counts.get(mode, 0) + 1
-
-        delay = dep.get("delay_minutes", 0)
-        if delay > 0:
-            delayed_count += 1
-            total_delays += delay
-
     with col1:
+        active_stations = len(df)
         st.markdown(
             f"""
-        <div class='metric-container'>
-            <h3 style='color: {BERLIN_COLORS["primary"]}; margin: 0;'>{len(departures)}</h3>
-            <p style='margin: 0; color: {BERLIN_COLORS["dark_gray"]};'>Next Departures</p>
+        <div class="metric-card">
+            <div class="metric-title">{active_stations}</div>
+            <div class="metric-subtitle">Active Stations<br><small>(Last 15-min window)</small></div>
         </div>
         """,
             unsafe_allow_html=True,
         )
 
     with col2:
-        on_time_pct = (
-            ((len(departures) - delayed_count) / len(departures) * 100)
-            if departures
-            else 0
+        avg_delay = df["avg_delay"].mean()
+        delay_status = (
+            "status-good"
+            if avg_delay < 2
+            else "status-warning" if avg_delay < 5 else "status-danger"
         )
         st.markdown(
             f"""
-        <div class='metric-container'>
-            <h3 style='color: {"#008000" if on_time_pct > 80 else BERLIN_COLORS["red"]}; margin: 0;'>{on_time_pct:.0f}%</h3>
-            <p style='margin: 0; color: {BERLIN_COLORS["dark_gray"]};'>On Time</p>
+        <div class="metric-card">
+            <div class="metric-title">
+                <span class="status-indicator {delay_status}"></span>{avg_delay:.1f} min
+            </div>
+            <div class="metric-subtitle">Average Delay</div>
         </div>
         """,
             unsafe_allow_html=True,
         )
 
     with col3:
-        avg_delay = (total_delays / delayed_count) if delayed_count > 0 else 0
+        avg_on_time = df["on_time_pct"].mean()
+        on_time_status = (
+            "status-good"
+            if avg_on_time > 80
+            else "status-warning" if avg_on_time > 60 else "status-danger"
+        )
         st.markdown(
             f"""
-        <div class='metric-container'>
-            <h3 style='color: {BERLIN_COLORS["red"] if avg_delay > 5 else BERLIN_COLORS["primary"]}; margin: 0;'>{avg_delay:.1f}</h3>
-            <p style='margin: 0; color: {BERLIN_COLORS["dark_gray"]};'>Avg Delay (min)</p>
+        <div class="metric-card">
+            <div class="metric-title">
+                <span class="status-indicator {on_time_status}"></span>{avg_on_time:.1f}%
+            </div>
+            <div class="metric-subtitle">On Time Performance</div>
         </div>
         """,
             unsafe_allow_html=True,
         )
 
     with col4:
-        most_common_mode = (
-            max(mode_counts.items(), key=lambda x: x[1])[0] if mode_counts else "none"
-        )
-        mode_info = TRANSPORT_MODES.get(
-            most_common_mode, {"icon": "🚌", "name": "Mixed"}
-        )
+        total_departures = df["total_departures"].sum()
         st.markdown(
             f"""
-        <div class='metric-container'>
-            <h3 style='color: {BERLIN_COLORS["primary"]}; margin: 0;'>{mode_info["icon"]}</h3>
-            <p style='margin: 0; color: {BERLIN_COLORS["dark_gray"]};'>{mode_info["name"]}</p>
+        <div class="metric-card">
+            <div class="metric-title">{total_departures}</div>
+            <div class="metric-subtitle">Total Departures<br><small>(Last 15-min window)</small></div>
         </div>
         """,
             unsafe_allow_html=True,
         )
+
+
+def render_station_table(df: pd.DataFrame):
+    """Render detailed station information table"""
+    if df.empty:
+        st.warning("No station data available")
+        return
+
+    st.subheader("📊 Station Details")
+
+    display_df = df.copy()
+    display_df = display_df[
+        [
+            "station_name",
+            "avg_delay",
+            "max_delay",
+            "on_time_pct",
+            "total_departures",
+            "delayed_departures",
+        ]
+    ]
+    display_df.columns = [
+        "Station",
+        "Avg Delay (min)",
+        "Max Delay (min)",
+        "On Time %",
+        "Total Departures",
+        "Delayed Departures",
+    ]
+
+    display_df = display_df.sort_values("Avg Delay (min)", ascending=False)
+
+    display_df = display_df.round(
+        {"Avg Delay (min)": 1, "Max Delay (min)": 1, "On Time %": 1}
+    )
+
+    def get_delay_status(delay):
+        if delay < 2:
+            return "🟢"
+        elif delay < 5:
+            return "🟡"
+        else:
+            return "🔴"
+
+    def get_performance_status(on_time_pct):
+        if on_time_pct > 80:
+            return "🟢"
+        elif on_time_pct > 60:
+            return "🟡"
+        else:
+            return "🔴"
+
+    display_df["Status"] = display_df["Avg Delay (min)"].apply(get_delay_status)
+    display_df["Performance"] = display_df["On Time %"].apply(get_performance_status)
+
+    cols = [
+        "Status",
+        "Station",
+        "Avg Delay (min)",
+        "Max Delay (min)",
+        "Performance",
+        "On Time %",
+        "Total Departures",
+        "Delayed Departures",
+    ]
+    display_df = display_df[cols]
+
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 
 def main():
-    init_streamlit_config()
-
-    current_time = datetime.now()
-    current_time_str = current_time.strftime("%H:%M:%S")
-    current_date_str = current_time.strftime("%A, %B %d, %Y")
+    """Main dashboard application"""
+    init_page_config()
 
     st.markdown(
         f"""
-    <div class='berlin-header'>
-        <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;'>
-            <div style='flex: 1;'></div>
-            <div style='flex: 2; text-align: center;'>
-                <h1 class='berlin-title'>🐻 Berlin Departure Board</h1>
-            </div>
-            <div style='flex: 1; text-align: right;'>
-                <div style='background: {BERLIN_COLORS["secondary"]}; color: {BERLIN_COLORS["primary"]};
-                           padding: 0.5rem 1rem; border-radius: 8px; font-weight: bold;'>
-                    <div style='font-size: 1.5rem;'>🕐 {current_time_str}</div>
-                    <div style='font-size: 0.8rem; opacity: 0.9;'>{current_date_str}</div>
-                </div>
-            </div>
-        </div>
-        <p class='berlin-subtitle'>Live departures from Berlin's public transport network</p>
+    <div class="header-container">
+        <h1>🗺️ Berlin Transit Delay Heatmap</h1>
+        <p>Real-time delay visualization across Berlin's public transport network</p>
+        <p><small>Updated every 5 minutes with windowed analytics</small></p>
     </div>
     """,
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        """
-    <div class='refresh-indicator'>
-        🔄 Auto-refresh: 5s
-    </div>
-    """,
-        unsafe_allow_html=True,
-    )
-
-    redis_client = init_redis_connection()
+    redis_client = init_redis_client()
     if not redis_client:
+        st.error("Cannot connect to data source. Please check the system status.")
         st.stop()
 
     with st.sidebar:
+        st.markdown("### ⚙️ Controls")
+
+        minutes_back = st.slider(
+            "Data Time Range (minutes)",
+            min_value=15,
+            max_value=120,
+            value=15,
+            step=15,
+            help="How far back to look for station metrics (15min = 1 window, 120min = 2 hours max)",
+        )
+
+        auto_refresh = st.checkbox(
+            "Auto Refresh",
+            value=True,
+            help="Automatically refresh data every 30 seconds",
+        )
+
+        if st.button("🔄 Refresh Now"):
+            st.cache_data.clear()
+            st.rerun()
+
+        st.markdown("---")
+        st.markdown("### 🗺️ Map Legend")
         st.markdown(
-            f"""
-        <div style='background: {BERLIN_COLORS["primary"]}; padding: 1rem; border-radius: 10px; margin-bottom: 1rem;'>
-            <h2 style='color: {BERLIN_COLORS["secondary"]}; text-align: center; margin: 0;'>
-                🚉 Station Selector
-            </h2>
-        </div>
-        """,
+            f'<div style="display: flex; align-items: center; margin: 5px 0;"><div style="width: 15px; height: 15px; background-color: #64B5F6; border-radius: 50%; margin-right: 8px; border: 1px solid #ccc;"></div>On Time (< 2 min)</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<div style="display: flex; align-items: center; margin: 5px 0;"><div style="width: 15px; height: 15px; background-color: #42A5F5; border-radius: 50%; margin-right: 8px; border: 1px solid #ccc;"></div>Minor Delay (2-5 min)</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<div style="display: flex; align-items: center; margin: 5px 0;"><div style="width: 15px; height: 15px; background-color: #2196F3; border-radius: 50%; margin-right: 8px; border: 1px solid #ccc;"></div>Moderate Delay (5-10 min)</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<div style="display: flex; align-items: center; margin: 5px 0;"><div style="width: 15px; height: 15px; background-color: #1976D2; border-radius: 50%; margin-right: 8px; border: 1px solid #ccc;"></div>Major Delay (10+ min)</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<div style="display: flex; align-items: center; margin: 5px 0;"><div style="width: 15px; height: 15px; background-color: #0D47A1; border-radius: 50%; margin-right: 8px; border: 1px solid #ccc;"></div>Severe Delay</div>',
             unsafe_allow_html=True,
         )
 
-        available_stations = {}
-        for station_id, station_name in BERLIN_STATIONS.items():
-            key = f"{settings.REDIS_DEPARTURES_KEY_PREFIX}station:{station_id}"
-            if redis_client.exists(key):
-                available_stations[station_id] = station_name
-
-        if not available_stations:
-            st.error("❌ No stations with data available")
-            st.info("💡 Make sure the data pipeline is running")
-            st.stop()
-
-        selected_station = st.selectbox(
-            "Choose a station:",
-            options=list(available_stations.keys()),
-            format_func=lambda x: available_stations[x],
-            index=0,
-        )
-
-        if not selected_station:
-            st.error("❌ No station selected")
-            st.stop()
-
         st.markdown("---")
-        st.markdown("### 📊 Station Info")
-        station_key = (
-            f"{settings.REDIS_DEPARTURES_KEY_PREFIX}station:{selected_station}"
-        )
-        departure_count = redis_client.zcard(station_key)
-        last_update = redis_client.ttl(station_key)
-
-        st.metric("Stored Departures", departure_count)
-        if last_update > 0:
-            st.metric("Data TTL", f"{last_update//60}m {last_update%60}s")
-
-        st.markdown("---")
-        st.markdown("### 🎯 Legend")
-        st.markdown("🟢 **Now** - Departing")
-        st.markdown("🟡 **X min** - Soon")
-        st.markdown("⏰ **HH:MM** - Scheduled")
-        st.markdown("🕐 **Time** - Exact departure")
-        st.markdown("✅ On time")
-        st.markdown("🟡 Small delay (<3 min)")
-        st.markdown("🔴 Significant delay")
-
-    station_name = available_stations[selected_station]
-
-    placeholder = st.empty()
-
-    with placeholder.container():
-        departures = get_station_departures(redis_client, selected_station)
-
-        render_station_metrics(departures)
-
-        st.markdown("---")
-
-        render_departure_table(departures, station_name)
-
+        st.markdown("### ℹ️ About")
+        st.markdown("**Data Windows:** 15-minute windows, updated every 5 minutes")
         st.markdown(
-            f"""
-        <div style='text-align: center; color: {BERLIN_COLORS["dark_gray"]}; margin-top: 2rem;'>
-            <small>📱 Last updated: {datetime.now().strftime("%H:%M:%S")} |
-            🔄 Next refresh in 30 seconds</small>
-        </div>
-        """,
-            unsafe_allow_html=True,
+            "**Metrics Period:** Each station shows aggregated data from the most recent 15-minute window"
+        )
+        st.markdown(
+            "**Total Departures:** Count of departures within the latest 15-minute window per station"
+        )
+        st.markdown(
+            "This dashboard shows real-time delay patterns across Berlin's transit network using windowed analytics."
         )
 
-    time.sleep(5)
-    st.rerun()
+    with st.spinner("Loading station delay data..."):
+        df = get_station_delay_data(redis_client, minutes_back)
+
+    if not df.empty:
+        st.sidebar.write(f"Stations found: {len(df)}")
+
+        st.sidebar.write(f"**Time Range:** {minutes_back} minutes")
+        st.sidebar.write(f"**Expected Windows:** ~{minutes_back // 5} (5min slides)")
+
+    else:
+        st.sidebar.write("No data available for debugging")
+
+    if df.empty:
+        st.warning(
+            "⚠️ No station data available. Please ensure the data pipeline is running."
+        )
+        st.info("The Spark streaming processor needs to be active to generate metrics.")
+        st.stop()
+
+    render_summary_metrics(df)
+
+    st.markdown("---")
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.subheader("🗺️ Interactive Delay Map")
+        fig = create_delay_heatmap(df)
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        st.subheader("🏆 Best/Worst Performers")
+
+        if not df.empty:
+            best_station = df.loc[df["avg_delay"].idxmin()]
+            st.markdown(
+                f"""
+            **🟢 Best Performance:**
+            - **{best_station['station_name']}**
+            - Avg Delay: {best_station['avg_delay']:.1f} min
+            - On Time: {best_station['on_time_pct']:.1f}%
+            """
+            )
+
+            worst_station = df.loc[df["avg_delay"].idxmax()]
+            st.markdown(
+                f"""
+            **🔴 Needs Attention:**
+            - **{worst_station['station_name']}**
+            - Avg Delay: {worst_station['avg_delay']:.1f} min
+            - On Time: {worst_station['on_time_pct']:.1f}%
+            """
+            )
+
+            busiest_station = df.loc[df["total_departures"].idxmax()]
+            st.markdown(
+                f"""
+            **🚉 Busiest Station:**
+            - **{busiest_station['station_name']}**
+            - {busiest_station['total_departures']} departures
+            - Avg Delay: {busiest_station['avg_delay']:.1f} min
+            """
+            )
+
+    st.markdown("---")
+
+    render_station_table(df)
+
+    current_time = datetime.now()
+    st.markdown(
+        f"""
+    <div style="text-align: center; color: {COLORS['muted']}; margin-top: 2rem; padding: 1rem;">
+        <small>
+            📱 Last updated: {current_time.strftime('%Y-%m-%d %H:%M:%S')} |
+            🔄 {'Auto-refresh enabled' if auto_refresh else 'Auto-refresh disabled'}
+        </small>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    if auto_refresh:
+        import time
+
+        time.sleep(30)
+        st.rerun()
 
 
 if __name__ == "__main__":
