@@ -49,7 +49,7 @@ class KafkaProducerClient:
                         "direction": departure.direction,
                         "planned_departure": departure.planned_departure.isoformat(),
                         "actual_departure": departure.actual_departure.isoformat(),
-                        "delay_seconds": departure.delay_minutes,
+                        "delay_minutes": departure.delay_minutes,
                         "platform": departure.platform,
                         "planned_platform": departure.planned_platform,
                         "collected_at": departure.collected_at.isoformat(),
