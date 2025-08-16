@@ -11,17 +11,17 @@ class Settings(BaseSettings):
     POLLER_ENABLED_STATIONS: List[str] = [
         "900100003",  # S+U Alexanderplatz
         "900100001",  # S+U Friedrichstr.
-        # "900003201",  # S+U Berlin Hauptbahnhof
-        # "900120003",  # S Ostkreuz Bhf
-        # "900023201",  # S+U Zoologischer Garten
-        # "900017101",  # S+U Potsdamer Platz
-        # "900024101",  # S+U Warschauer Str.
-        # "900013102",  # S Hackescher Markt
-        # "900110001",  # S+U Gesundbrunnen
-        # "900230999",  # S+U Schönhauser Allee
+        "900003201",  # S+U Berlin Hauptbahnhof
+        "900120003",  # S Ostkreuz Bhf
+        "900023201",  # S+U Zoologischer Garten
+        "900017101",  # S+U Potsdamer Platz
+        "900024101",  # S+U Warschauer Str.
+        "900013102",  # S Hackescher Markt
+        "900110001",  # S+U Gesundbrunnen
+        "900230999",  # S+U Schönhauser Allee
     ]
 
-    POLLING_INTERVAL: int = 10
+    POLLING_INTERVAL: int = 300
 
     POLLER_HOST: str = "0.0.0.0"
     POLLER_PORT: int = 8000
@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: str | None = None
     REDIS_DEPARTURES_KEY_PREFIX: str = "departure:"
     REDIS_TTL_SECONDS: int = 3600  # 1 hour TTL for departures
+    REDIS_TTL_AGG_SECONDS: int = 900  # 15 min TTL for Aggregation
 
     class Config:
         env_file = ".env"
