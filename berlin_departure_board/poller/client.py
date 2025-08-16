@@ -18,10 +18,10 @@ class BVGAPIClient:
     async def close(self):
         await self.client.aclose()
 
-    async def get_departure_info(self, station_id: str, duration_minutes: int = 60):
+    async def get_departure_info(self, station_id: str, duration_minutes: int = 5):
         try:
             url = f"{self.base_url}/stops/{station_id}/departures"
-            params = {"duration": duration_minutes, "results": 20}
+            params = {"duration": duration_minutes}
 
             logger.info(f"Fetching departures: {url} with params {params}")
 
