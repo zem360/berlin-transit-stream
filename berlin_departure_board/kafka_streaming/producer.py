@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 
 from confluent_kafka import Producer
@@ -38,7 +38,7 @@ class KafkaProducerClient:
             for departure in departures:
                 message = {
                     "event_type": "departure_update",
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "data": {
                         "trip_id": departure.trip_id,
                         "station_id": departure.station_id,
