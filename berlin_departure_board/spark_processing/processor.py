@@ -8,10 +8,12 @@ from pyspark.sql.functions import (
     approx_count_distinct,
     avg,
     col,
+    count,
     current_timestamp,
     from_json,
 )
 from pyspark.sql.functions import max as spark_max
+from pyspark.sql.functions import sum as spark_sum
 from pyspark.sql.functions import to_timestamp, when, window
 from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
@@ -23,7 +25,6 @@ class BVGSparkProcessor:
     def __init__(self):
         self.redis_client = RedisClient()
         logger.info("✅ Enhanced Redis client initialized for Spark processing")
-
         self._cleanup_checkpoints()
 
         self.kafka_config = {
@@ -43,12 +44,10 @@ class BVGSparkProcessor:
             .config("spark.sql.session.timeZone", "UTC")
             .getOrCreate()
         )
-
         self.spark.sparkContext.setLogLevel("WARN")
         logger.info("✅ Spark session initialized")
 
         self.window_duration = "15 minutes"
-        self.slide_duration = "5 minutes"
         self.watermark_delay = "10 minutes"
 
         self.message_schema = StructType(
@@ -83,7 +82,6 @@ class BVGSparkProcessor:
 
     def create_kafka_stream(self):
         logger.info("📡 Connecting to Kafka stream...")
-
         return self.spark.readStream.format("kafka").options(**self.kafka_config).load()
 
     def parse_and_filter_messages(self, kafka_df):
@@ -115,25 +113,48 @@ class BVGSparkProcessor:
             .withColumn(
                 "is_significant_delay", when(col("delay_minutes") > 5, 1).otherwise(0)
             )
-            .filter(col("planned_departure_ts") > col("current_time"))
             .filter(col("station_id").isNotNull())
             .filter(col("trip_id").isNotNull())
             .filter(col("line_id").isNotNull())
-            .withWatermark("planned_departure_ts", self.watermark_delay)
+            .filter(col("collected_at_ts").isNotNull())
+            .withWatermark("collected_at_ts", self.watermark_delay)
         )
 
         return filtered_df
 
+    def debug_aggregation_foreach_batch(self, df, epoch_id):
+        agg_count = df.count()
+        logger.info(
+            f"🔍 DEBUG Aggregation batch {epoch_id}: {agg_count} aggregation records"
+        )
+
+        if agg_count > 0:
+            rows = df.collect()
+            for row in rows:
+                data = row.asDict()
+                logger.info(
+                    f"🔍 Aggregation record: Station={data.get('station_name')}, "
+                    f"Total departures={data.get('total_departures')}, "
+                    f"Window={data.get('window_start')} to {data.get('window_end')}"
+                )
+        else:
+            logger.warning(f"🔍 No aggregation data in batch {epoch_id}")
+
     def create_station_aggregations(self, enriched_df):
-        logger.info("📊 Creating station-level aggregations...")
+        logger.info("📊 Creating station-level aggregations with tumbling windows...")
+
+        debug_stream = enriched_df.select(
+            "station_id",
+            "station_name",
+            "trip_id",
+            "collected_at_ts",
+            "planned_departure_ts",
+            "line_id",
+        )
 
         station_aggs = (
             enriched_df.groupBy(
-                window(
-                    col("planned_departure_ts"),
-                    self.window_duration,
-                    self.slide_duration,
-                ),
+                window(col("collected_at_ts"), self.window_duration),
                 col("station_id"),
                 col("station_name"),
                 col("latitude"),
@@ -142,16 +163,12 @@ class BVGSparkProcessor:
             .agg(
                 avg("delay_minutes").alias("avg_delay"),
                 spark_max("delay_minutes").alias("max_delay"),
-                approx_count_distinct("trip_id").alias("total_departures"),
-                approx_count_distinct(
-                    when(col("is_delayed") == 1, col("trip_id"))
-                ).alias("delayed_departures"),
-                approx_count_distinct(
-                    when(col("is_on_time") == 1, col("trip_id"))
-                ).alias("on_time_departures"),
-                approx_count_distinct(
-                    when(col("is_significant_delay") == 1, col("trip_id"))
-                ).alias("significant_delays"),
+                approx_count_distinct("trip_id", 0.01).alias("total_departures"),
+                spark_sum("is_delayed").alias("delayed_departures"),
+                spark_sum("is_on_time").alias("on_time_departures"),
+                spark_sum("is_significant_delay").alias("significant_delays"),
+                count("*").alias("total_records"),
+                approx_count_distinct("line_id", 0.01).alias("unique_lines"),
             )
             .withColumn(
                 "on_time_pct",
@@ -165,7 +182,7 @@ class BVGSparkProcessor:
             .drop("window")
         )
 
-        return station_aggs
+        return station_aggs, debug_stream
 
     def _cleanup_checkpoints(self):
         checkpoint_base = Path("/tmp/spark-checkpoint")
@@ -175,7 +192,6 @@ class BVGSparkProcessor:
                 logger.info("🧹 Cleaned up existing checkpoint directories")
             except Exception as e:
                 logger.warning(f"Failed to clean checkpoints: {e}")
-
         checkpoint_base.mkdir(parents=True, exist_ok=True)
 
     def store_station_metrics(self, df, epoch_id):
@@ -183,12 +199,23 @@ class BVGSparkProcessor:
 
         try:
             self.redis_client.redis_client.ping()
-            rows = df.collect()
 
+            total_rows = df.count()
+            logger.info(f"🔍 Processing {total_rows} aggregated station metrics")
+
+            if total_rows == 0:
+                logger.warning(f"⚠️ No station metrics to store for epoch {epoch_id}")
+                return
+
+            rows = df.collect()
             stored_count = 0
+
             for row in rows:
                 try:
                     data = row.asDict()
+
+                    if "hauptbahnhof" in data.get("station_name", "").lower():
+                        logger.info(f"🚂 Hauptbahnhof metrics: {data}")
 
                     metrics = {
                         "station_id": data["station_id"],
@@ -205,6 +232,8 @@ class BVGSparkProcessor:
                         "delay_pct": round(data.get("delay_pct", 0), 1),
                         "latitude": data.get("latitude"),
                         "longitude": data.get("longitude"),
+                        "total_records": data.get("total_records", 0),
+                        "unique_lines": data.get("unique_lines", 0),
                         "updated_at": datetime.now().isoformat(),
                     }
 
@@ -215,7 +244,7 @@ class BVGSparkProcessor:
                     logger.warning(f"Failed to store station metric: {e}")
                     continue
 
-            logger.info(f"✅ Stored {stored_count} station metrics")
+            logger.info(f"✅ Stored {stored_count}/{total_rows} station metrics")
 
         except Exception as e:
             logger.error(f"❌ Failed to store station metrics: {e}")
@@ -231,9 +260,15 @@ class BVGSparkProcessor:
 
         logger.info(f"📦 Processing batch {epoch_id} with {batch_count} departures")
 
+        sample_row = df.first()
+        if sample_row:
+            sample_dict = sample_row.asDict()
+            logger.info(
+                f"🕒 Sample timestamps - collected_at_ts: {sample_dict.get('collected_at_ts')}, current_time: {datetime.now()}"
+            )
+
         try:
             self.redis_client.redis_client.ping()
-
             departures = df.collect()
             stored_count = 0
             error_count = 0
@@ -241,12 +276,10 @@ class BVGSparkProcessor:
             for row in departures:
                 try:
                     departure_data = row.asDict()
-
                     if self.store_departure_sync(departure_data):
                         stored_count += 1
                     else:
                         error_count += 1
-
                 except Exception as e:
                     logger.warning(f"Failed to process row in batch {epoch_id}: {e}")
                     error_count += 1
@@ -261,7 +294,9 @@ class BVGSparkProcessor:
 
     def start_processing(self):
         try:
-            logger.info("🚀 Starting enhanced BVG processing pipeline...")
+            logger.info(
+                "🚀 Starting enhanced BVG processing pipeline with tumbling windows..."
+            )
 
             kafka_stream = self.create_kafka_stream()
             enriched_stream = self.parse_and_filter_messages(kafka_stream)
@@ -285,7 +320,9 @@ class BVGSparkProcessor:
                 "latitude",
             )
 
-            station_aggs = self.create_station_aggregations(enriched_stream)
+            station_aggs, debug_stream = self.create_station_aggregations(
+                enriched_stream
+            )
 
             departure_query = (
                 output_stream.writeStream.foreachBatch(
@@ -297,7 +334,29 @@ class BVGSparkProcessor:
                 .start()
             )
 
+            debug_query = (
+                debug_stream.writeStream.foreachBatch(
+                    lambda df, epoch_id: logger.info(
+                        f"🔍 DEBUG Raw data batch {epoch_id}: {df.count()} records available for aggregation"
+                    )
+                )
+                .outputMode("append")
+                .option("checkpointLocation", "/tmp/spark-checkpoint/debug-stream")
+                .trigger(processingTime="30 seconds")
+                .start()
+            )
+
             station_query = (
+                station_aggs.writeStream.foreachBatch(
+                    self.debug_aggregation_foreach_batch
+                )
+                .outputMode("update")
+                .option("checkpointLocation", "/tmp/spark-checkpoint/debug-aggregation")
+                .trigger(processingTime="90 seconds")
+                .start()
+            )
+
+            station_storage_query = (
                 station_aggs.writeStream.foreachBatch(self.store_station_metrics)
                 .outputMode("update")
                 .option("checkpointLocation", "/tmp/spark-checkpoint/station-metrics")
@@ -314,15 +373,10 @@ class BVGSparkProcessor:
             logger.info(
                 f"   - Station metrics: metrics:station:{{station_id}}:window:{{timestamp}}"
             )
-            logger.info(
-                f"   - Line metrics: metrics:line:{{line_id}}:station:{{station_id}}:window:{{timestamp}}"
-            )
-            logger.info(
-                f"📈 Aggregation windows: {self.window_duration} (slide: {self.slide_duration})"
-            )
+            logger.info(f"📈 Aggregation windows: {self.window_duration} (tumbling)")
             logger.info("🎯 Real-time departure data + windowed analytics available")
 
-            return departure_query, station_query
+            return departure_query, station_query, debug_query, station_storage_query
 
         except Exception as e:
             logger.error(f"❌ Failed to start enhanced processing: {e}")
@@ -331,8 +385,8 @@ class BVGSparkProcessor:
     def stop_processing(self, *queries):
         """Stop the streaming queries and close connections"""
         logger.info("🛑 Stopping enhanced streaming queries...")
-
         query_names = ["Departure", "Station", "Line"]
+
         for i, query in enumerate(queries):
             if query and query.isActive:
                 query.stop()
