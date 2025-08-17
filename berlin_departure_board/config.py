@@ -21,7 +21,7 @@ class Settings(BaseSettings):
         "900230999",  # S+U Schönhauser Allee
     ]
 
-    POLLING_INTERVAL: int = 300
+    POLLING_INTERVAL: int = 60
 
     POLLER_HOST: str = "0.0.0.0"
     POLLER_PORT: int = 8000
