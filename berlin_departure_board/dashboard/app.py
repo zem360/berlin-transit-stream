@@ -142,11 +142,15 @@ def get_station_delay_data(
             on_time_departures = sum(
                 int(m.get("on_time_departures", 0)) for m in valid_metrics
             )
+            significant_delays = sum(
+                int(m.get("significant_delays", 0)) for m in valid_metrics
+            )
 
             weighted_delay_sum = sum(
                 float(m.get("avg_delay", 0)) * int(m.get("total_departures", 0))
                 for m in valid_metrics
                 if m.get("avg_delay") is not None
+                and int(m.get("total_departures", 0)) > 0
             )
             avg_delay = (
                 weighted_delay_sum / total_departures if total_departures > 0 else 0.0
@@ -154,16 +158,28 @@ def get_station_delay_data(
 
             max_delay = max(float(m.get("max_delay", 0)) for m in valid_metrics)
 
-            on_time_pct = (
-                (on_time_departures / total_departures * 100)
-                if total_departures > 0
-                else 100.0
-            )
-            delay_pct = (
-                (delayed_departures / total_departures * 100)
-                if total_departures > 0
-                else 0.0
-            )
+            if total_departures > 0:
+                max_on_time = min(on_time_departures, total_departures)
+                max_delayed = min(delayed_departures, total_departures)
+
+                on_time_pct = max_on_time / total_departures * 100
+                delay_pct = max_delayed / total_departures * 100
+
+                if max_on_time + max_delayed > total_departures:
+                    scale_factor = total_departures / (max_on_time + max_delayed)
+                    on_time_pct = max_on_time * scale_factor / total_departures * 100
+                    delay_pct = max_delayed * scale_factor / total_departures * 100
+            else:
+                on_time_pct = 100.0
+                delay_pct = 0.0
+
+            window_starts = [
+                m.get("window_start", "")
+                for m in valid_metrics
+                if m.get("window_start")
+            ]
+            earliest_window = min(window_starts) if window_starts else ""
+            latest_window = max(window_starts) if window_starts else ""
 
             rows.append(
                 {
@@ -171,14 +187,17 @@ def get_station_delay_data(
                     "station_name": station_name,
                     "lat": float(lat),
                     "lon": float(lon),
-                    "avg_delay": avg_delay,
-                    "max_delay": max_delay,
+                    "avg_delay": round(avg_delay, 1),
+                    "max_delay": round(max_delay, 1),
                     "total_departures": total_departures,
                     "delayed_departures": delayed_departures,
                     "on_time_departures": on_time_departures,
+                    "significant_delays": significant_delays,
                     "on_time_pct": round(on_time_pct, 1),
                     "delay_pct": round(delay_pct, 1),
-                    "window_start": latest_metric.get("window_start", ""),
+                    "window_start": earliest_window,
+                    "window_end": latest_window,
+                    "windows_count": len(valid_metrics),
                     "updated_at": latest_metric.get("updated_at", ""),
                     "raw_metric": str(latest_metric),
                 }
@@ -241,8 +260,8 @@ def create_delay_heatmap(df: pd.DataFrame) -> go.Figure:
     for category, color in legend_categories:
         fig.add_trace(
             go.Scattermapbox(
-                lat=[None],
-                lon=[None],
+                lat=[],
+                lon=[],
                 mode="markers",
                 marker=dict(size=15, color=color, opacity=0.8),
                 name=category,
@@ -295,9 +314,11 @@ def create_delay_heatmap(df: pd.DataFrame) -> go.Figure:
             y=0.99,
             xanchor="left",
             x=0.01,
-            bgcolor="rgba(255,255,255,0.9)",
-            bordercolor="rgba(0,0,0,0.2)",
+            bgcolor="rgba(255,255,255,0.95)",
+            bordercolor="rgba(0,0,0,0.3)",
             borderwidth=1,
+            font=dict(size=12, color=COLORS["text"]),
+            itemsizing="constant",
         ),
         height=600,
         margin=dict(l=0, r=0, t=60, b=0),
@@ -313,7 +334,7 @@ def render_summary_metrics(df: pd.DataFrame):
         st.warning("No station data available for metrics")
         return
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         active_stations = len(df)
@@ -321,7 +342,7 @@ def render_summary_metrics(df: pd.DataFrame):
             f"""
         <div class="metric-card">
             <div class="metric-title">{active_stations}</div>
-            <div class="metric-subtitle">Active Stations<br><small>(Last 15-min window)</small></div>
+            <div class="metric-subtitle">Active Stations<br><small>(Rolled up data)</small></div>
         </div>
         """,
             unsafe_allow_html=True,
@@ -347,31 +368,12 @@ def render_summary_metrics(df: pd.DataFrame):
         )
 
     with col3:
-        avg_on_time = df["on_time_pct"].mean()
-        on_time_status = (
-            "status-good"
-            if avg_on_time > 80
-            else "status-warning" if avg_on_time > 60 else "status-danger"
-        )
-        st.markdown(
-            f"""
-        <div class="metric-card">
-            <div class="metric-title">
-                <span class="status-indicator {on_time_status}"></span>{avg_on_time:.1f}%
-            </div>
-            <div class="metric-subtitle">On Time Performance</div>
-        </div>
-        """,
-            unsafe_allow_html=True,
-        )
-
-    with col4:
         total_departures = df["total_departures"].sum()
         st.markdown(
             f"""
         <div class="metric-card">
             <div class="metric-title">{total_departures}</div>
-            <div class="metric-subtitle">Total Departures<br><small>(Last 15-min window)</small></div>
+            <div class="metric-subtitle">Total Departures<br><small>(Rolled up across windows)</small></div>
         </div>
         """,
             unsafe_allow_html=True,
@@ -513,25 +515,38 @@ def main():
 
         st.markdown("---")
         st.markdown("### ℹ️ About")
-        st.markdown("**Data Windows:** 15-minute windows, updated every 5 minutes")
         st.markdown(
-            "**Metrics Period:** Each station shows aggregated data from the most recent 15-minute window"
+            "**Real-time Transit Monitoring:** Monitors performance across major Berlin stations, recording delays, on-time performance, and departure volumes in real-time."
         )
         st.markdown(
-            "**Total Departures:** Count of departures within the latest 15-minute window per station"
+            "**Data Collection:** Continuously tracks BVG (Berlin public transport) departure data using streaming analytics with 15-minute tumbling windows."
         )
         st.markdown(
-            "This dashboard shows real-time delay patterns across Berlin's transit network using windowed analytics."
+            f"**Time Range:** Currently showing {minutes_back} minutes of aggregated data across ~{minutes_back // 15} measurement windows."
+        )
+        st.markdown(
+            "**Interactive Map:** Color-coded stations show delay severity - from blue (on-time) to dark blue (severe delays). Larger markers indicate higher average delays."
         )
 
     with st.spinner("Loading station delay data..."):
         df = get_station_delay_data(redis_client, minutes_back)
 
     if not df.empty:
-        st.sidebar.write(f"Stations found: {len(df)}")
-
+        st.sidebar.write(f"**Stations found:** {len(df)}")
         st.sidebar.write(f"**Time Range:** {minutes_back} minutes")
-        st.sidebar.write(f"**Expected Windows:** ~{minutes_back // 5} (5min slides)")
+        st.sidebar.write(
+            f"**Expected Windows:** ~{minutes_back // 15} (15min tumbling)"
+        )
+
+        if "windows_count" in df.columns:
+            avg_windows = df["windows_count"].mean()
+            max_windows = df["windows_count"].max()
+            min_windows = df["windows_count"].min()
+            st.sidebar.write(f"**Avg Windows/Station:** {avg_windows:.1f}")
+            st.sidebar.write(f"**Windows Range:** {min_windows}-{max_windows}")
+
+        total_departures = df["total_departures"].sum()
+        st.sidebar.write(f"**Total Departures (Rolled):** {total_departures}")
 
     else:
         st.sidebar.write("No data available for debugging")
