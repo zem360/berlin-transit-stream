@@ -20,7 +20,7 @@ class BVGPollingScheduler:
             logger.debug(f"Polling departures for station {station_id}")
 
             departures = await self.bvg_client.get_departure_info(
-                station_id=station_id, duration_minutes=20
+                station_id=station_id, duration_minutes=1
             )
 
             if departures:
