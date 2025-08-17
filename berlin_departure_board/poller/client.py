@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 from loguru import logger
@@ -18,7 +18,7 @@ class BVGAPIClient:
     async def close(self):
         await self.client.aclose()
 
-    async def get_departure_info(self, station_id: str, duration_minutes: int = 5):
+    async def get_departure_info(self, station_id: str, duration_minutes: int = 1):
         try:
             url = f"{self.base_url}/stops/{station_id}/departures"
             params = {"duration": duration_minutes}
@@ -35,7 +35,7 @@ class BVGAPIClient:
                 f"Found {len(raw_departures)} raw departures for station {station_id}"
             )
 
-            fetch_time = datetime.now()
+            fetch_time = datetime.now(timezone.utc)
 
             process_departures = []
             for raw_dep in raw_departures:
