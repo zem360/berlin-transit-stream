@@ -29,7 +29,7 @@ def main():
         queries = processor.start_processing()
 
         if isinstance(queries, tuple):
-            departure_query, station_query = queries
+            departure_query, station_query, debug_query, station_storage_query = queries
             departure_query.awaitTermination()
         else:
             queries.awaitTermination()
